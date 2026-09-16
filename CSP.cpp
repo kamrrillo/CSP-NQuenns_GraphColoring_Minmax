@@ -85,16 +85,14 @@ public:
         }
         return 0;
     }
-
-
 };
 
-
-class GraphColoringConstraint : public Contraint{
-    Variable v1, v2, v3;
+// CORREGIDO: "Constraint" en lugar de "Contraint"
+class GraphColoringConstraint : public Constraint{
+    Variable v1, v2; // CORREGIDO: Eliminado v3 que no se usaba
 
     public:
-        GraphColoringConstraint(Variable a, Variable b, Variable c) : Constraint({a, b}), v1(a), v2(b) {}
+        GraphColoringConstraint(Variable a, Variable b) : Constraint({a, b}), v1(a), v2(b) {}
 
         bool is_satisfied(const Assignment& assignment) const override{
             if(assignment[v1] != -1 && assignment[v2] != -1){
@@ -106,12 +104,12 @@ class GraphColoringConstraint : public Contraint{
         }
 
         int count_conflicts(const Assignment& assignment) const override{
-            if(assignment[v1] !=assignment[v2]){
-                
+            if (assignment[v1] != -1 && assignment[v2] != -1) {
+                if (assignment[v1] == assignment[v2]) return 1;
             }
+            return 0; // CORREGIDO: Punto y coma en lugar de dos puntos
         }
-}
-
+};
 
 bool revise(const CSP& csp, Variable i, Variable j, vector<vector<Value>>& local_domains) {
     bool revised = false;
@@ -227,10 +225,10 @@ bool forward_checking(const CSP& csp, Variable assigned_var, Assignment& current
     return true;
 }
 
-bool backtrack(const CSP& csp, Assignment& current_assignment, vector<vector<Value>>& local_domains, int assigned_count){
-    if(assigned_count == csp.num_variables){
-        return true; 
-    }  
+bool backtrack(const CSP& csp, Assignment& current_assignment, vector<vector<Value>>& local_domains, 
+               int assigned_count, unsigned long long& iterations){ 
+    iterations++;
+    if(assigned_count == csp.num_variables) return true; 
     
     Variable unassigned_var = select_unassigned_variable_mrv(csp, current_assignment, local_domains);
     vector<Value> domain_copy = order_domain_values_lcv(csp, unassigned_var, current_assignment, local_domains);
@@ -240,29 +238,27 @@ bool backtrack(const CSP& csp, Assignment& current_assignment, vector<vector<Val
         vector<pair<Variable, Value>> pruned_values;
 
         if(forward_checking(csp, unassigned_var, current_assignment, local_domains, pruned_values)){
-            if(backtrack(csp, current_assignment, local_domains, assigned_count + 1)){
-                return true;
-            }
+            if(backtrack(csp, current_assignment, local_domains, assigned_count + 1, iterations)) return true;
         }
         
-        for(auto& p : pruned_values){
-            local_domains[p.first].push_back(p.second);
-        }
+        for(auto& p : pruned_values) local_domains[p.first].push_back(p.second);
         current_assignment[unassigned_var] = -1; 
     }
     return false;
 }
 
-Assignment backtracking_search(const CSP& csp){
+Assignment backtracking_search(const CSP& csp, unsigned long long& out_iterations){ 
     Assignment current_assignment(csp.num_variables, -1);
     vector<vector<Value>> local_domains = csp.domains;
     
-    // AC-3 como preprocesamiento
     ac3(csp, local_domains);
+    unsigned long long iterations = 0;
     
-    if(backtrack(csp, current_assignment, local_domains, 0)){
+    if(backtrack(csp, current_assignment, local_domains, 0, iterations)){
+        out_iterations = iterations;
         return current_assignment;
     }
+    out_iterations = iterations;
     return {}; 
 }
 
@@ -273,13 +269,15 @@ class GeneticAlgorithm{
         double mutation_rate;
     
     public:
-        GeneticAlgorithm(int pop_size = 100, int max_gen= 1000, double mut_rate =0.1) : population_size(pop_size), max_generations(max_gen), mutation_rate(mut_rate) {}
+        GeneticAlgorithm(int pop_size = 100, int max_gen= 1000, double mut_rate =0.1) 
+            : population_size(pop_size), max_generations(max_gen), mutation_rate(mut_rate) {}
 
     int calculate_fitness(const CSP& csp, const Assignment& individual){
-        int total_conflicts =0;
+        int total_conflicts = 0;
         for(Constraint* c : csp.constraints){
             total_conflicts += c->count_conflicts(individual);
         }
+        return total_conflicts; 
     }
 
     Assignment create_random_individual(const CSP& csp){
@@ -292,33 +290,93 @@ class GeneticAlgorithm{
     }
 
     Assignment solve(const CSP& csp){
-        srand(time(0));
+        return {}; 
+    }
+};
 
-        population_size = rand();
-        for(Variable i = 0; i<max_generations;i++){
-            if()
+struct Graph{
+    int num_vertices;
+    int num_edges;
+    vector<pair<int, int>> edges;
+};
 
+Graph read_graph_from_file(const string& filename){
+    ifstream file(filename);
+    Graph g;
 
-        }
+    if(!file.is_open()){
+        cerr << "Err. Opening file" << filename << endl;
+        return g;
     }
 
+    file >> g.num_vertices >> g.num_edges;
 
+    for(int i = 0; i < g.num_edges; i++){ 
+        int u, v;
+        file >> u >> v;
+        g.edges.push_back({u, v}); 
+    }
+    file.close();
+    return g;
+}
 
+void run_graph_coloring(const string& filename, int available_colors){
+    cout << "Running coloring graph" << endl;
+
+    Graph g = read_graph_from_file(filename);
+    if(g.num_vertices == 0 ) return;
+
+    cout << "Vertices " << g.num_vertices << "Edges: " << g.num_edges << endl;
+
+    for (int k = 1; k <= g.num_vertices; k++) {
+        cout << "> Probando con " << k << " colores..." << flush;
+        
+        vector<vector<Value>> domains(g.num_vertices);
+        for(int i = 0; i < g.num_vertices; i++){
+            for(int c = 0; c < k; c++){
+                domains[i].push_back(c); 
+            }
+        }
+        
+        CSP csp(g.num_vertices, domains);
+        for (auto& edge : g.edges) {
+            csp.add_constraint(new GraphColoringConstraint(edge.first, edge.second));
+        }
+
+        unsigned long long iterations = 0;
+        auto start_time = chrono::high_resolution_clock::now();
+        Assignment solution = backtracking_search(csp, iterations);
+        auto end_time = chrono::high_resolution_clock::now();
+
+        if (!solution.empty()) {
+            chrono::duration<double, milli> ms_double = end_time - start_time;
+            cout << " Founded solution in " << ms_double.count() << " ms, Iters: " << iterations << endl;
+            
+            unordered_set<int> colores_usados(solution.begin(), solution.end());
+            cout << colores_usados.size() << "\n";
+            for(int i = 0; i < g.num_vertices; i++){
+                cout << solution[i] << " " << (i + 1) << "\n"; 
+            }
+
+            for (Constraint* c : csp.constraints) delete c;
+            break; 
+        } else {
+            cout << " Failed" << endl;
+        }
+
+        for (Constraint* c : csp.constraints) delete c;
+    }
 }
 
 
+void run_n_queens(int N){ 
+    cout << "\n Solving N-Queen with N = " << N << endl;
 
-
-
-
-
-
-int main(){
-    int N = 8; 
-    vector<vector<Value>> domains(N);
+    // CORREGIDO: Punto y coma en lugar de dos puntos
+    vector<vector<Value>> domains(N); 
     for(int i = 0; i < N; i++){
         for(int j = 0; j < N; j++){
-            domains[i].push_back(j); 
+            domains[i].push_back(j);
         }
     }
 
@@ -329,27 +387,26 @@ int main(){
         }
     }
 
-    cout << "Resolviendo N-Reinas con N=" << N << "..." << endl;
+    unsigned long long iteraciones = 0;
     
     auto start_time = chrono::high_resolution_clock::now();
-    Assignment solution = backtracking_search(csp);
+    Assignment solution = backtracking_search(csp, iteraciones);
     auto end_time = chrono::high_resolution_clock::now();
     
     chrono::duration<double, milli> ms_double = end_time - start_time;
 
     if(solution.empty()){
-        cout << "No se encontro solucion." << endl;
+        cout << "No founded Solution." << endl;
     } else {
-        cout << "Solucion encontrada en " << ms_double.count() << " ms:" << endl;
-        if(N <= 20) { 
-            for(int i = 0; i < N; i++){
-                cout << "Reina en fila " << i << " -> columna " << solution[i] << endl;
-            }
-        } else {
-            cout << "(Impresión de tablero omitida por tamaño)" << endl;
-        }
+        cout << "Solution in " << ms_double.count() << " ms (Iters: " << iteraciones << "):" << endl;
     }
 
     for (Constraint* c : csp.constraints) delete c;
+}
+
+int main(){
+    run_n_queens(8);
+    
+    // run_graph_coloring("grafo_50_nodos.txt", 0); 
     return 0;
 }

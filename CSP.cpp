@@ -87,9 +87,9 @@ public:
     }
 };
 
-// CORREGIDO: "Constraint" en lugar de "Contraint"
+
 class GraphColoringConstraint : public Constraint{
-    Variable v1, v2; // CORREGIDO: Eliminado v3 que no se usaba
+    Variable v1, v2; 
 
     public:
         GraphColoringConstraint(Variable a, Variable b) : Constraint({a, b}), v1(a), v2(b) {}
@@ -107,7 +107,7 @@ class GraphColoringConstraint : public Constraint{
             if (assignment[v1] != -1 && assignment[v2] != -1) {
                 if (assignment[v1] == assignment[v2]) return 1;
             }
-            return 0; // CORREGIDO: Punto y coma en lugar de dos puntos
+            return 0; 
         }
 };
 
@@ -261,13 +261,51 @@ Assignment backtracking_search(const CSP& csp, unsigned long long& out_iteration
     out_iterations = iterations;
     return {}; 
 }
-
 class GeneticAlgorithm{
     private:
         int population_size;
         int max_generations;
         double mutation_rate;
     
+    Assignment tournament_selection(const vector<Assignment>& population, const vector<int>& fitnesses, int k = 3) {
+        int best_idx = rand() % population.size(); 
+
+        for (int i = 1; i < k; i++) {
+            int contender_idx = rand() % population.size();
+            if (fitnesses[contender_idx] < fitnesses[best_idx]) {
+                best_idx = contender_idx;
+            }
+        }
+        return population[best_idx];
+    }
+
+    pair<Assignment, Assignment> crossover(const Assignment& parent1, const Assignment& parent2) {
+        int N = parent1.size();
+        
+        int cut_point = rand() % N; 
+    
+        Assignment child1 = parent1;
+        Assignment child2 = parent2;
+        
+        for (int i = cut_point; i < N; i++) {
+            child1[i] = parent2[i];
+            child2[i] = parent1[i];
+        }
+        
+        return {child1, child2};
+    }
+
+    void mutate(Assignment& individual, const CSP& csp) {
+        for (Variable v : csp.variables) {
+            double r = (double)rand() / RAND_MAX; 
+            
+            if (r < mutation_rate) {
+                int domain_size = csp.domains[v].size();
+                individual[v] = csp.domains[v][rand() % domain_size];
+            }
+        }
+    }
+
     public:
         GeneticAlgorithm(int pop_size = 100, int max_gen= 1000, double mut_rate =0.1) 
             : population_size(pop_size), max_generations(max_gen), mutation_rate(mut_rate) {}
@@ -289,8 +327,69 @@ class GeneticAlgorithm{
         return individual;
     }
 
-    Assignment solve(const CSP& csp){
-        return {}; 
+    Assignment solve(const CSP& csp) {
+        srand(time(0));
+
+        vector<Assignment> population(population_size);
+
+        for(int i = 0; i < population_size;i++){
+            population[i] = create_random_individual(csp);
+        }
+
+        Assignment overall_best;
+        int overall_best_fitness = 99999;
+
+        for(int gen = 0; gen < max_generations; gen++){
+            vector<int> fitnesses(population_size);
+            int current_best_fitness = 99999;
+            int current_best_idx = -1;
+
+            for(int i = 0; i < population_size; i++){
+                fitnesses[i] = calculate_fitness(csp, population[i]);
+
+                if(fitnesses[i] < current_best_fitness){
+                    current_best_fitness = fitnesses[i];
+                    current_best_idx = i;
+                }
+            }
+
+            if(current_best_fitness < overall_best_fitness){
+                overall_best_fitness = current_best_fitness;
+                overall_best = population[current_best_idx];
+            }
+
+            if(gen % 50 == 0){
+                cout << "Gen: " << gen << " Overall best fitness " << overall_best_fitness << "\r" << flush;
+            }
+
+            if(overall_best_fitness == 0){
+                cout << "\nPerfect solution founded in generation: " << gen << endl;
+                return overall_best;
+            }
+
+
+            vector<Assignment> new_population;
+            new_population.push_back(population[current_best_idx]);
+
+            while(new_population.size() < population_size){
+                Assignment parent1 = tournament_selection(population, fitnesses);
+                Assignment parent2 = tournament_selection(population, fitnesses);
+            
+                auto [child1, child2] = crossover(parent1, parent2);
+
+                mutate(child1, csp);
+                mutate(child2, csp);
+
+                new_population.push_back(child1);
+                if(new_population.size() < population_size){
+                    new_population.push_back(child2);
+                }
+            }
+            population = new_population;
+        }
+        
+        cout << "\n[ Max generations archieved. Best fitness: " << overall_best_fitness << endl;
+        return overall_best;
     }
 };
 
@@ -315,6 +414,7 @@ Graph read_graph_from_file(const string& filename){
         int u, v;
         file >> u >> v;
         g.edges.push_back({u, v}); 
+
     }
     file.close();
     return g;

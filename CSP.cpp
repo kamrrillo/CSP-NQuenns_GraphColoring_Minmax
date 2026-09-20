@@ -6,6 +6,9 @@ using Variable = int;
 using Value = int;
 using Assignment = vector<Value>;
 
+// =========================================================================== //
+//  MODELADO GENERICO DEL CSP                                                   //
+// =========================================================================== //
 class Constraint{
     public:
         vector<Variable> scope;
@@ -34,15 +37,25 @@ class CSP{
 
         void add_constraint(Constraint* constraint){
             constraints.push_back(constraint);
+            // Solo llenamos el indice aqui; los vecinos se construyen una vez al
+            // final con build_neighbors() para evitar el O(grado^2) del find lineal.
             for(Variable v1 : constraint->scope){
                 constraint_index[v1].push_back(constraint);
-                for(Variable v2 : constraint->scope){
-                    if(v1 != v2){
-                        if(find(neighbors[v1].begin(), neighbors[v1].end(), v2) == neighbors[v1].end()){
-                            neighbors[v1].push_back(v2);
-                        }
-                    }
-                }
+            }
+        }
+
+        // Construye la lista de vecinos de cada variable a partir del indice,
+        // deduplicando con sort+unique -> O(sum grado log grado) en total.
+        // Debe llamarse una vez, despues de agregar todas las restricciones.
+        void build_neighbors(){
+            for(int v = 0; v < num_variables; v++){
+                neighbors[v].clear();
+                for(Constraint* c : constraint_index[v])
+                    for(Variable u : c->scope)
+                        if(u != v) neighbors[v].push_back(u);
+                sort(neighbors[v].begin(), neighbors[v].end());
+                neighbors[v].erase(unique(neighbors[v].begin(), neighbors[v].end()),
+                                   neighbors[v].end());
             }
         }
 
@@ -108,7 +121,9 @@ class GraphColoringConstraint : public Constraint{
         }
 };
 
-
+// =========================================================================== //
+//  AC-3 / MRV / LCV / FORWARD CHECKING / BACKTRACKING                          //
+// =========================================================================== //
 bool revise(const CSP& csp, Variable i, Variable j, vector<vector<Value>>& local_domains) {
     bool revised = false;
     vector<Value> surviving;
@@ -178,6 +193,8 @@ Variable select_unassigned_variable_mrv(const CSP& csp, const Assignment& curren
 }
 
 vector<Value> order_domain_values_lcv(const CSP& csp, Variable var, Assignment& current_assignment, const vector<vector<Value>>& local_domains) {
+    // Nota: opera sobre current_assignment y restaura (is_consistent ya restaura),
+    // por lo que no se copia la asignacion completa por cada valor.
     vector<pair<int, Value>> value_impact;
     for(Value val : local_domains[var]) {
         current_assignment[var] = val;
@@ -251,6 +268,7 @@ Assignment backtracking_search(const CSP& csp, unsigned long long& out_iteration
 
     unsigned long long iterations = 0;
 
+    // Si AC-3 vacia algun dominio, el CSP es inconsistente: no hay que buscar.
     if(!ac3(csp, local_domains)){
         out_iterations = 0;
         return {};
@@ -264,14 +282,19 @@ Assignment backtracking_search(const CSP& csp, unsigned long long& out_iteration
     return {};
 }
 
+// =========================================================================== //
+//  ALGORITMO GENETICO HIBRIDO (mutacion min-conflicts INCREMENTAL)             //
+// =========================================================================== //
 class GeneticAlgorithm{
     private:
         int population_size;
         int max_generations;
         double mutation_rate;
-        int max_stagnation;     
-        mt19937 rng;            
+        int max_stagnation;     // umbral para el reinicio por diversidad
+        mt19937 rng;            // Mersenne Twister: aleatoriedad reproducible
 
+        // Conflictos locales de la variable v con SUS vecinos, con el valor que
+        // v tenga ahora mismo en 'individual'. O(grado de v), no O(#restricciones).
         int local_conflicts(const CSP& csp, const Assignment& individual, Variable v) const {
             int c = 0;
             for(Constraint* constraint : csp.constraint_index[v]){
@@ -306,6 +329,11 @@ class GeneticAlgorithm{
             return {child1, child2};
         }
 
+        // Mutacion min-conflicts VERDADERAMENTE INCREMENTAL.
+        // Recibe el fitness por referencia y lo actualiza por delta local: al mover
+        // v de un valor a otro, solo cambian las restricciones que tocan a v, asi que
+        //   fitness += (conflictos_locales_nuevos - conflictos_locales_viejos).
+        // Nunca se recorre el total de restricciones.
         void mutate(Assignment& individual, int& fitness, const CSP& csp) {
             uniform_real_distribution<double> prob_dist(0.0, 1.0);
 
@@ -327,9 +355,11 @@ class GeneticAlgorithm{
                         }
                     }
 
+                    // Desempate al azar para no sesgar el vecindario
                     uniform_int_distribution<int> val_dist(0, best_values.size() - 1);
                     individual[v] = best_values[val_dist(rng)];
 
+                    // Actualizacion incremental del fitness global del individuo
                     fitness += (best_local - old_local);
                 }
             }
@@ -341,6 +371,8 @@ class GeneticAlgorithm{
             : population_size(pop_size), max_generations(max_gen), mutation_rate(mut_rate),
               max_stagnation(stagnation), rng(seed) {}
 
+        // Fitness completo O(#restricciones): solo para individuos nuevos
+        // (poblacion inicial y recien cruzados). La mutacion NO lo usa.
         int calculate_fitness(const CSP& csp, const Assignment& individual) const {
             int total_conflicts = 0;
             for(Constraint* c : csp.constraints){
@@ -358,6 +390,8 @@ class GeneticAlgorithm{
             return individual;
         }
 
+        // Devuelve la mejor asignacion y reporta en out_conflicts sus conflictos
+        // (0 = solucion valida) y en out_generations la generacion donde termino.
         Assignment solve(const CSP& csp, int& out_conflicts, int& out_generations, bool verbose = true){
             vector<Assignment> population(population_size);
             vector<int> fitness(population_size);
@@ -379,6 +413,7 @@ class GeneticAlgorithm{
             int restarts = 0;
 
             for(int gen = 0; gen < max_generations; gen++){
+                // mejor de la generacion (sin recomputar: fitness ya esta al dia)
                 int current_best_fitness = fitness[0];
                 int current_best_idx = 0;
                 for(int i = 1; i < population_size; i++){
@@ -403,7 +438,7 @@ class GeneticAlgorithm{
                 }
 
                 if(overall_best_fitness == 0){
-                    if(verbose) cout << "\n  Solucion perfecta en generacion " << gen
+                    if(verbose) cout << "\n  [GA] Solucion perfecta en generacion " << gen
                                      << " (reinicios: " << restarts << ")" << endl;
                     out_conflicts = 0;
                     out_generations = gen;
@@ -412,10 +447,12 @@ class GeneticAlgorithm{
 
                 vector<Assignment> new_population;
                 vector<int> new_fitness;
+                // Elitismo: sembramos SIEMPRE al mejor global (no solo al de esta gen)
                 new_population.push_back(overall_best);
                 new_fitness.push_back(overall_best_fitness);
 
                 if(stagnant_generations >= max_stagnation){
+                    // Reinicio catastrofico: reinyectamos diversidad (a la Doerr et al.)
                     while((int)new_population.size() < population_size){
                         Assignment ind = create_random_individual(csp);
                         new_population.push_back(ind);
@@ -430,6 +467,8 @@ class GeneticAlgorithm{
 
                         auto [child1, child2] = crossover(parent1, parent2);
 
+                        // Fitness completo una vez tras la cruza; luego la mutacion
+                        // lo mantiene al dia de forma incremental.
                         int f1 = calculate_fitness(csp, child1);
                         mutate(child1, f1, csp);
                         new_population.push_back(child1);
@@ -454,6 +493,9 @@ class GeneticAlgorithm{
         }
 };
 
+// =========================================================================== //
+//  LECTURA DE GRAFOS                                                           //
+// =========================================================================== //
 struct Graph{
     int num_vertices;
     int num_edges;
@@ -478,6 +520,7 @@ Graph read_graph_from_file(const string& filename){
     return g;
 }
 
+// Verificacion independiente: cuenta conflictos totales de una asignacion completa
 int total_conflicts(const CSP& csp, const Assignment& a){
     int c = 0;
     for(Constraint* con : csp.constraints) c += con->count_conflicts(a);
@@ -490,7 +533,7 @@ int total_conflicts(const CSP& csp, const Assignment& a){
 enum class Method { BACKTRACKING, GENETIC };
 
 void run_n_queens(int N, Method method){
-    string mname = (method == Method::BACKTRACKING) ? "Backtracking" : "Algoritmo Genetico";
+    string mname = (method == Method::BACKTRACKING) ? "Backtracking (MRV+LCV+FC+AC3)" : "Algoritmo Genetico";
     cout << "\n=== N-Reinas | N=" << N << " | " << mname << " ===" << endl;
 
     vector<vector<Value>> domains(N);
@@ -502,6 +545,7 @@ void run_n_queens(int N, Method method){
     for(int i = 0; i < N; i++)
         for(int j = i + 1; j < N; j++)
             csp.add_constraint(new BinaryQueenConstraint(i, j));
+    csp.build_neighbors();
 
     Assignment solution;
     auto start_time = chrono::high_resolution_clock::now();
@@ -533,23 +577,38 @@ void run_n_queens(int N, Method method){
 
 void run_graph_coloring(const string& filename, Method method){
     string mname = (method == Method::BACKTRACKING) ? "Backtracking" : "Algoritmo Genetico";
-    cout << "\nColoreado de grafo | " << filename << " | " << mname << " ===" << endl;
+    cout << "\n=== Coloreado de grafo | " << filename << " | " << mname << " ===" << endl;
 
     Graph g = read_graph_from_file(filename);
-    if(g.num_vertices == 0){ cout << "  Grafo vacio" << endl; return; }
-    cout << "  Vertices: " << g.num_vertices << " | Aristas: " << g.num_edges << endl;
+    if(g.num_vertices == 0){ cout << "  Grafo vacio o no leido." << endl; return; }
 
-    for(int k = 1; k <= g.num_vertices; k++){
+    // Deteccion automatica del indexado: el archivo puede venir 0-indexado
+    // (0..V-1) o 1-indexado (1..V). Usamos offset = id minimo y ajustamos el
+    // numero de vertices por si el encabezado no coincide con los ids reales.
+    int offset = 0, maxid = -1;
+    if(g.num_edges > 0){
+        offset = INT_MAX;
+        for(auto& e : g.edges){
+            offset = min(offset, min(e.first, e.second));
+            maxid  = max(maxid,  max(e.first, e.second));
+        }
+    }
+    int V = max(g.num_vertices, maxid - offset + 1);
+    cout << "  Vertices: " << V << " | Aristas: " << g.num_edges
+         << " | indexado desde " << offset << endl;
+
+    for(int k = 1; k <= V; k++){
         cout << "  > Probando con " << k << " colores..." << flush;
 
-        vector<vector<Value>> domains(g.num_vertices);
-        for(int i = 0; i < g.num_vertices; i++)
+        vector<vector<Value>> domains(V);
+        for(int i = 0; i < V; i++)
             for(int c = 0; c < k; c++)
                 domains[i].push_back(c);
 
-        CSP csp(g.num_vertices, domains);
+        CSP csp(V, domains);
         for(auto& edge : g.edges)
-            csp.add_constraint(new GraphColoringConstraint(edge.first - 1, edge.second - 1));
+            csp.add_constraint(new GraphColoringConstraint(edge.first - offset, edge.second - offset));
+        csp.build_neighbors();
 
         Assignment solution;
         bool solved = false;
@@ -575,10 +634,12 @@ void run_graph_coloring(const string& filename, Method method){
         }
 
         if(solved){
+            // Formato pedido: numero de colores, luego "color vertice"
+            // (el vertice se reporta con el indexado original del archivo)
             unordered_set<int> usados(solution.begin(), solution.end());
-            cout << "  Numero hallado: " << usados.size() << "\n";
-            for(int i = 0; i < g.num_vertices; i++)
-                cout << "  " << solution[i] << " " << (i + 1) << "\n";
+            cout << "  Numero cromatico hallado: " << usados.size() << "\n";
+            for(int i = 0; i < V; i++)
+                cout << "  " << solution[i] << " " << (i + offset) << "\n";
             for(Constraint* c : csp.constraints) delete c;
             break;
         }
@@ -587,15 +648,17 @@ void run_graph_coloring(const string& filename, Method method){
 }
 
 int main(int argc, char** argv){
+    // N-Reinas con ambos metodos
     run_n_queens(8, Method::BACKTRACKING);
     run_n_queens(8, Method::GENETIC);
     run_n_queens(30, Method::GENETIC);
 
-    // run_graph_coloring(" ", Method::BACKTRACKING);
-    // run_graph_coloring(" ", Method::GENETIC);
+    // Coloreado (descomenta y pasa tu archivo):
+    // run_graph_coloring("grafo_50_nodos.txt", Method::BACKTRACKING);
+    // run_graph_coloring("grafo_50_nodos.txt", Method::GENETIC);
 
     if(argc > 1){
-        string file = argv[1];git 
+        string file = argv[1];
         run_graph_coloring(file, Method::GENETIC);
     }
     return 0;

@@ -1,5 +1,3 @@
-
-
 #include <bits/stdc++.h>
 using namespace std;
 
@@ -160,30 +158,16 @@ bool never_loses(Board& b, int agent, int to_move) {
     }
 }
 
-int self_play(bool verbose) {
-    Board b{}; b.fill(0);
-    int to_move = 1;
-    while(winner(b) == 0 && !is_full(b)) {
-        int val; long long nodes = 0;
-        int pos = best_move(b, to_move, true, val, nodes);
-        b[pos] = to_move;
-        if(verbose) { cout << "J" << to_move << " -> " << pos << "\n"; render(b); cout << "\n"; }
-        to_move = 3 - to_move;
-    }
-    return winner(b);
-}
-
 int main(int argc, char** argv) {
     if(argc > 1 && string(argv[1]) == "play") {
         Board b{}; b.fill(0);
         int human = 1, ai = 2, to_move = 1;
-        cout << "Humano: 'O' (0-8). IA: 'X'.\n\n";
         render(b); cout << "\n";
         while(winner(b) == 0 && !is_full(b)) {
             if(to_move == human) {
                 int pos; cout << "> ";
                 if(!(cin >> pos)) break;
-                if(pos < 0 || pos > 8 || b[pos] != 0) { cout << "Invalido.\n"; continue; }
+                if(pos < 0 || pos > 8 || b[pos] != 0) continue;
                 b[pos] = human;
             } else {
                 int val; long long nodes = 0;
@@ -194,40 +178,31 @@ int main(int argc, char** argv) {
             render(b); cout << "\n";
             to_move = 3 - to_move;
         }
-        int w = winner(b);
-        cout << (w == 0 ? "Empate." : (w == human ? "Gana humano." : "Gana IA.")) << "\n";
         return 0;
     }
 
     Board empty{}; empty.fill(0);
 
-    cout << "Evaluacion raiz (J1):\n";
     int val; long long nodes = 0;
     int pos = best_move(empty, 1, true, val, nodes);
-    cout << "Mejor jugada: " << pos << " | Valor: " << val << "\n\n";
+    cout << "Jugada inicial optima: " << pos << "\nValor: " << val << "\n\n";
 
-    cout << "Rendimiento (nodos):\n";
     long long n1 = 0, n2 = 0;
     minimax(empty, 1, 1, n1);
     alphabeta(empty, 1, 1, -2, 2, n2);
-    cout << "Minimax puro: " << n1 << "\n";
-    cout << "Alfa-beta:    " << n2 << "\n\n";
+    cout << "Nodos Minimax: " << n1 << "\n";
+    cout << "Nodos Alfa-Beta: " << n2 << "\n\n";
 
-    cout << "Pruebas de consistencia:\n";
     long long tested = 0, mismatch = 0;
     set<pair<array<int,9>,int>> seen;
     Board b = empty;
     gen_check(b, 1, tested, mismatch, seen);
     cout << "Estados unicos explorados: " << tested << "\n";
-    cout << "Discrepancias Minimax/AB: " << mismatch << "\n";
+    cout << "Discrepancias Minimax/AB: " << mismatch << "\n\n";
 
     Board b1 = empty, b2 = empty;
-    cout << "J1 invicto: " << (never_loses(b1, 1, 1) ? "OK" : "Fallo") << "\n";
-    cout << "J2 invicto: " << (never_loses(b2, 2, 1) ? "OK" : "Fallo") << "\n\n";
-
-    cout << "Autojuego:\n";
-    int w = self_play(false);
-    cout << "Resultado: " << (w == 0 ? "Empate" : "Gana " + to_string(w)) << "\n";
+    cout << "J1 Invicto: " << (never_loses(b1, 1, 1) ? "OK" : "FAIL") << "\n";
+    cout << "J2 Invicto: " << (never_loses(b2, 2, 1) ? "OK" : "FAIL") << "\n";
 
     return 0;
 }

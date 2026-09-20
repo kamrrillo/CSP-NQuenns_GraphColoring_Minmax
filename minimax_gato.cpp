@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
                 int val; long long nodes = 0;
                 int pos = best_move(b, ai, true, val, nodes);
                 b[pos] = ai;
-                cout << "IA -> " << pos << "\n";
+                cout << "Agente -> " << pos << "\n";
             }
             render(b); cout << "\n";
             to_move = 3 - to_move;
